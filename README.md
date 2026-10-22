@@ -1,12 +1,10 @@
 # 🚀 DataInsight AI
 
-### AI-Powered Data Analytics & Machine Learning Preparation Platform
+### Commercial AI-Powered Business Analytics & Intelligence Platform
 
-DataInsight AI is an AI-powered data analytics application built using **Python**, **Streamlit**, **Pandas**, **Plotly**, and **Groq (Llama 3.3 70B Versatile)**.
+DataInsight AI is an executive data analytics platform built using **Python**, **Streamlit**, **Pandas**, **Plotly**, and **Groq (Llama 3.3 70B Versatile)**.
 
-It enables users to upload datasets, clean and preprocess data, perform Exploratory Data Analysis (EDA), generate interactive visualizations, and receive AI-powered insights using natural language.
-
-The platform is designed to simplify the complete data preparation workflow before machine learning model development.
+It enables business leaders, managers, and data analysts to upload datasets, audit data health, automatically calculate executive financial KPIs, explore interactive visual dynamics, analyze product profitability, and receive evidence-based strategic recommendations.
 
 ---
 
@@ -16,91 +14,56 @@ The platform is designed to simplify the complete data preparation workflow befo
 
 ---
 
-# ✨ Features
+# ✨ Core Features
+
+## 💼 Business Performance Dashboard (New)
+
+An executive-grade SaaS business intelligence dashboard that automatically maps columns and calculates key commercial metrics:
+
+- **Executive KPI Cards**: Total Revenue, Net Profit, Profit Margin (%), Total Loss from Negative-Profit Records, Average Order Value (AOV), and Growth Trends (MoM/WoW).
+- **Automatic Column Detection**: Pattern-matches date, product, category, revenue, cost, profit, quantity, price, order ID, and customer fields with an intuitive user override drawer.
+- **Smart Profit Engine**: Directly handles precomputed profit or dynamically computes `Net Profit = Revenue − Cost`. Clearly documents the calculation method and assumptions.
+- **Automatic Visual Analytics**: 2 to 4 responsive Plotly charts answering core business questions (e.g., Performance Trajectory, Product Profitability Diverging Bar, Revenue vs. Profit Bubble Quadrants, Category Comparison) with plain-language explanations.
+- **Product Profitability & Unit Economics**: Interactive table classifying products as *Top Performer*, *Profitable*, *Loss-Maker 🔴*, or *High Revenue / Low Margin ⚠️*, with CSV export.
+- **Evidence-Based Recommendations Engine**: 4-part transparent strategic action items (Observation, Supporting Evidence, Business Impact, Recommended Next Steps).
+- **AI Executive Briefing**: Groq LLM synthesis of verified pandas-calculated metrics with automatic deterministic fallback if the API is offline.
+- **Advanced Visualization Studio**: Analyst sandbox for custom dimensions, measures, aggregations (Sum, Mean, Median, Count, Min, Max), color groupings, and chart types.
+
+---
 
 ## 📂 Data Processing
 
-Clean and preprocess datasets without writing code.
+Clean and preprocess datasets without writing code:
 
-### Available Operations
-
-- Upload CSV datasets
-- Preview uploaded dataset
-- Handle missing values
-- Remove duplicate records
-- Rename columns
-- Drop unwanted columns
-- Convert data types
-- Download cleaned dataset
+- Upload CSV and Excel (`.xlsx`, `.xls`) datasets
+- Preview uploaded data and schema inspection
+- Identify missing values and duplicate records
+- Automated imputation and deduplication
+- Instant download of cleaned CSV and Excel files
 
 ---
 
 ## 📈 Visual Analytics
 
-Generate beautiful interactive visualizations using Plotly.
+Interactive data exploration using Plotly:
 
-### Supported Charts
-
-- 📊 Bar Chart
-- 📈 Histogram
+- 📊 Bar Chart & Horizontal Bar
+- 📈 Histogram & Distribution Curves
 - 🔵 Scatter Plot
-- 🥧 Pie Chart
+- 🥧 Pie / Donut Chart
 - 📦 Box Plot
 - 🔥 Correlation Heatmap
-
-### Customization Options
-
-- Chart title
-- Color themes
-- Adjustable chart height
-- Interactive zoom and hover
 
 ---
 
 ## 🧠 AI Insights & Reports
 
-Powered by **Groq Cloud** using **Llama 3.3 70B Versatile**.
+Powered by **Groq Cloud** using **Llama 3.3 70B Versatile**:
 
-Ask questions in natural language such as:
-
-- Summarize this dataset.
-- What important patterns do you observe?
-- Are there any anomalies?
-- Which columns appear highly correlated?
-- What preprocessing steps should be performed?
-- Is this dataset suitable for Machine Learning?
-- Suggest feature engineering ideas.
-- Recommend improvements before model training.
-
-The AI analyzes:
-
-- Dataset shape
-- Column information
-- Data types
-- Statistical summary
-- Sample records
-
-and generates:
-
-- Executive Summary
-- Dataset Interpretation
-- Pattern Detection
-- Trend Analysis
-- Data Quality Assessment
-- Actionable Recommendations
-- Machine Learning Preparation Suggestions
-
----
-
-## 📄 AI Report Generation
-
-Generate downloadable AI reports containing:
-
-- Dataset Summary
-- User Question
-- AI-generated Insights
-- Recommendations
-- Report Generation Timestamp
+- Ask questions in natural language
+- Statistical summaries, trend observations, and anomaly detection
+- Machine Learning readiness evaluation
+- Downloadable management reports
 
 ---
 
@@ -108,12 +71,12 @@ Generate downloadable AI reports containing:
 
 | Technology | Purpose |
 |------------|---------|
-| Python | Core Programming Language |
-| Streamlit | Web application framework |
-| Pandas | Data Cleaning & Data Manipulation |
-| Plotly | Interactive Data Visualization |
-| Groq API | AI Inference |
-| Llama 3.3 70B Versatile | Large Language Model |
+| Python 3.12+ / 3.14 | Core Programming Language |
+| Streamlit | Web Application Framework |
+| Pandas | Data Manipulation & Financial Calculations |
+| Plotly | Interactive Visual Analytics |
+| Groq Cloud API | Llama 3.3 70B Versatile LLM Inference |
+| OpenPyXL | Excel File Processing |
 
 ---
 
@@ -122,21 +85,26 @@ Generate downloadable AI reports containing:
 ```text
 DataInsight-AI/
 │
-├── Home.py
+├── Home.py                               # Landing page & navigation hub
 │
 ├── pages/
-│   ├── 1_📂 Data Processing.py
-│   ├── 2_📈 Visual Analytics.py
-│   └── 3_🧠 AI Insights & Reports.py
+│   ├── 1_📂 Data Processing.py          # Data upload, inspection & cleaning
+│   ├── 2_💼 Business Dashboard.py        # Executive Business Performance Dashboard
+│   ├── 3_📈 Visual Analytics.py         # Interactive manual visual explorer
+│   └── 4_🧠 AI Insights & Reports.py    # Natural language AI query assistant
 │
 ├── utils/
+│   ├── analytics.py                      # Column mapping, KPI math, product & rec engine
+│   ├── charts.py                         # Professional SaaS Plotly chart builders
+│   ├── ai_insights.py                    # Verified analytical summary for Groq LLM
+│   └── helper.py                         # Currency, percentage, and number formatters
+│
+├── tests/
+│   └── test_dashboard.py                 # Automated unit tests covering all 10 edge cases
 │
 ├── assets/
-│
 ├── .streamlit/
-│   └── secrets.toml
-│
-├── .devcontainer/
+│   └── secrets.toml                      # Groq API configuration
 │
 ├── requirements.txt
 ├── README.md
@@ -145,47 +113,44 @@ DataInsight-AI/
 
 ---
 
-# 🚀 Installation
+# 🚀 Installation & Running
 
-Clone the repository
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/Shivendra0629/DataInsight-AI.git
-```
-
-Move into the project directory
-
-```bash
 cd DataInsight-AI
 ```
 
-Create a virtual environment
+### 2. Create and activate a virtual environment
 
 ```bash
+# Windows
 python -m venv venv
-```
-
-Activate the environment
-
-### Windows
-
-```bash
 venv\Scripts\activate
-```
 
-### Linux / macOS
-
-```bash
+# Linux / macOS
+python -m venv venv
 source venv/bin/activate
 ```
 
-Install dependencies
+### 3. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Run the application
+### 4. Configure Groq API Key
+
+Create or edit `.streamlit/secrets.toml`:
+
+```toml
+GROQ_API_KEY = "your_groq_api_key_here"
+```
+
+*(Note: The dashboard functions deterministically even without an API key).*
+
+### 5. Run the application
 
 ```bash
 streamlit run Home.py
@@ -193,92 +158,16 @@ streamlit run Home.py
 
 ---
 
-# 🔑 API Configuration
+# 🧪 Running Automated Tests
 
-Create the following file:
-
-```
-.streamlit/secrets.toml
-```
-
-Add your Groq API Key:
-
-```toml
-GROQ_API_KEY="YOUR_API_KEY"
-```
-
----
-
-# 🎯 Project Highlights
-
-- AI-assisted Dataset Analysis
-- Interactive Data Cleaning
-- Exploratory Data Analysis (EDA)
-- Interactive Plotly Dashboards
-- AI-generated Dataset Insights
-- Downloadable AI Reports
-- Session State Management
-- Multi-page Streamlit Application
-- Responsive User Interface
-- Machine Learning Dataset Preparation
-
----
-
-# 🔮 Future Improvements
-
-- Automated Feature Engineering
-- Machine Learning Model Training
-- AutoML Integration
-- Feature Importance Analysis
-- Outlier Detection Assistant
-- Time Series Forecasting
-- PDF Report Export
-- Excel Report Export
-- SQL Database Connectivity
-- User Authentication
-- Dashboard Sharing
-
----
-
-# 🤝 Contributing
-
-Contributions are welcome!
-
-1. Fork the repository.
-
-2. Create a new branch.
+Run the full test suite verifying all 10 business edge cases (product/revenue/cost, direct profit, date trends, non-financial data, missing values, negative profit, zero revenue, ambiguous headers, empty datasets, and high-cardinality catalogs):
 
 ```bash
-git checkout -b feature-name
+python -m unittest tests/test_dashboard.py
 ```
-
-3. Commit your changes.
-
-```bash
-git commit -m "Added new feature"
-```
-
-4. Push your branch.
-
-```bash
-git push origin feature-name
-```
-
-5. Open a Pull Request.
 
 ---
 
-# 📜 License
+# 👨‍💻 Developed by
 
-This project is licensed under the MIT License.
-
----
-
-# 👨‍💻 Developer
-
-## Shivendra Mahato
-
-**Python Developer • Data Analytics Enthusiast • AI & Machine Learning Learner**
-
----
-
+**Shivendra Mahato** — *DataInsight AI*

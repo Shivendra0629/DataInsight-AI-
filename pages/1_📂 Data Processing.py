@@ -1,13 +1,17 @@
 import streamlit as st 
 import pandas as pd 
+from io import BytesIO
 
 st.title("📂 Dataset Preprocessing")
 st.subheader("Upload your CSV dataset, review its structure, clean it automatically, and download the processed file.")
 
-uploaded_file =st.file_uploader("Choose your CSV file",type=["csv"])
+uploaded_file =st.file_uploader("Choose your file",type=["csv","xlsx", "xls"])
 
 if uploaded_file is not None:
-    df= pd.read_csv(uploaded_file)
+    if uploaded_file.name.endswith(".csv"):
+        df = pd.read_csv(uploaded_file)
+    elif uploaded_file.name.endswith((".xlsx", ".xls")):
+        df = pd.read_excel(uploaded_file)
     st.session_state["Dataset"]=df
     st.success("✅ File uploaded successfully")
     st.divider()
@@ -88,25 +92,56 @@ if "Dataset" in st.session_state:
         cleaned_df.dropna(axis=1, how="all", inplace=True)
         for col in cleaned_df.columns:
             if pd.api.types.is_numeric_dtype(cleaned_df[col]):
-                cleaned_df[col]=cleaned_df[col].fillna(cleaned_df[col].median())
+                median_val = cleaned_df[col].median()
+                cleaned_df[col] = cleaned_df[col].fillna(0 if pd.isna(median_val) else median_val)
             else:
-                cleaned_df[col]=cleaned_df[col].fillna(cleaned_df[col].mode()[0])
+                modes = cleaned_df[col].mode()
+                cleaned_df[col] = cleaned_df[col].fillna(modes.iloc[0] if not modes.empty else 'Unknown')
     
     st.session_state["Cleaned_Dataset"] = cleaned_df
     st.success("✅ Dataset cleaned successfully!")
     st.divider()
 
+
+
 if "Cleaned_Dataset" in st.session_state:
+
     st.subheader("📥 Download Clean Dataset")
+
     cleaned_df = st.session_state["Cleaned_Dataset"]
-    
+
+    col1, col2 = st.columns(2)
+
+    # CSV Download
     csv = cleaned_df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-            label="⬇️ Download Cleaned Dataset (CSV)",
+
+    with col1:
+        st.download_button(
+            label="📄 Download CSV",
             data=csv,
             file_name="cleaned_dataset.csv",
-            mime="text/csv"
-            )
+            mime="text/csv",
+            use_container_width=True
+        )
+
+    # Excel Download
+    buffer = BytesIO()  #Create an empty temporary file in memory.
+
+                            #.ExcelWriter(buffer)---> writes into memory.
+
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:   #engine --> excelwriter doesn't know how to create excel file so uses openpyxl where pandas say to create file 
+        cleaned_df.to_excel(writer, index=False)
+
+    xlsx = buffer.getvalue()
+
+    with col2:
+        st.download_button(
+            label="📊 Download Excel",
+            data=xlsx,
+            file_name="cleaned_dataset.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
          
     after_rows = cleaned_df.shape[0]
     after_columns = cleaned_df.shape[1]
