@@ -23,8 +23,12 @@ from utils.analytics import (
     calculate_business_kpis,
     analyze_product_performance,
     analyze_category_performance,
-    generate_business_recommendations
+    generate_business_recommendations,
+    BusinessAlert,
+    AlertSystemResult,
+    detect_loss_making_products
 )
+from utils.ai_insights import generate_alert_investigation_briefing
 from utils.charts import (
     create_kpi_trend_chart,
     create_product_profitability_chart,
@@ -272,6 +276,281 @@ class TestFormattingAndStudio(unittest.TestCase):
         fig = create_custom_studio_chart(df, "Bar Chart", x_col="Region", y_col="Sales", agg_func="sum")
         self.assertIsNotNone(fig)
         self.assertEqual(fig.layout.title.text, "<b>Bar Chart: Region vs Sales</b>")
+
+
+
+
+class TestEvidenceBasedBusinessAlerts(unittest.TestCase):
+    """
+    Validates all functional requirements for the Evidence-Based Business Alert System:
+    1. Product with positive profit is not flagged.
+    2. Product with negative profit is flagged correctly with full financial evidence.
+    3. Product with zero profit is not flagged.
+    4. Multiple loss-making products are aggregated correctly.
+    5. Missing financial columns are handled safely.
+    6. Empty dataset is handled safely.
+    7. Missing and non-numeric values do not produce misleading results.
+    8. Zero revenue does not cause division-by-zero errors in margin calculations.
+    9. Existing filters and custom column mappings are respected.
+    10. Existing analytics functions remain unbroken.
+    11. Unit cost vs total cost compatibility.
+    12. Deterministic offline investigation fallback without external API call.
+    """
+
+    def test_1_positive_profit_not_flagged(self):
+        """1. A product with positive profit is not flagged."""
+        df = pd.DataFrame({
+            "product_name": ["Profitable Gadget A", "Profitable Gadget B"],
+            "revenue": [1000.0, 2500.0],
+            "cost": [600.0, 1800.0]  # Profits: +400.0, +700.0
+        })
+        mapping = detect_column_mapping(df)
+        result = detect_loss_making_products(df, mapping)
+
+        self.assertTrue(result.is_applicable)
+        self.assertEqual(result.total_flagged_count, 0)
+        self.assertEqual(len(result.alerts), 0)
+        self.assertEqual(result.total_combined_loss, 0.0)
+        self.assertIn("No loss-making products detected", result.status_message)
+
+    def test_2_negative_profit_flagged_correctly(self):
+        """2. A product with negative profit is flagged correctly with financial evidence."""
+        df = pd.DataFrame({
+            "product_name": ["Product A", "Product B"],
+            "revenue": [8000.0, 5000.0],
+            "cost": [10000.0, 3000.0]  # Product A: profit = -2000.0; Product B: profit = +2000.0
+        })
+        mapping = detect_column_mapping(df)
+        result = detect_loss_making_products(df, mapping, currency_symbol="₹")
+
+        self.assertTrue(result.is_applicable)
+        self.assertEqual(result.total_flagged_count, 1)
+        self.assertEqual(len(result.alerts), 1)
+
+        alert = result.alerts[0]
+        self.assertEqual(alert.product_name, "Product A")
+        self.assertEqual(alert.revenue, 8000.0)
+        self.assertEqual(alert.cost, 10000.0)
+        self.assertEqual(alert.net_profit, -2000.0)
+        self.assertEqual(alert.loss_amount, 2000.0)
+        # Margin = -2000 / 8000 * 100 = -25.0%
+        self.assertAlmostEqual(alert.profit_margin_pct, -25.0, places=2)
+        self.assertIn("Product A", alert.title)
+        self.assertIn("exceeds", alert.explanation.lower())
+        self.assertIn("₹10,000", alert.explanation)
+        self.assertIn("₹8,000", alert.explanation)
+        self.assertIn("₹2,000", alert.explanation)
+        self.assertIn("price", alert.suggested_action.lower())
+        self.assertIn("cost", alert.suggested_action.lower())
+
+    def test_3_zero_profit_not_flagged(self):
+        """3. A product with zero profit is not flagged as loss-making (break-even)."""
+        df = pd.DataFrame({
+            "product_name": ["Break Even Widget", "Profitable Widget"],
+            "revenue": [1500.0, 3000.0],
+            "cost": [1500.0, 2000.0]  # Profit: 0.0, +1000.0
+        })
+        mapping = detect_column_mapping(df)
+        result = detect_loss_making_products(df, mapping)
+
+        self.assertTrue(result.is_applicable)
+        self.assertEqual(result.total_flagged_count, 0)
+        self.assertEqual(len(result.alerts), 0)
+        self.assertEqual(result.total_combined_loss, 0.0)
+
+    def test_4_multiple_loss_making_products_aggregated(self):
+        """4. Multiple loss-making products are aggregated correctly."""
+        df = pd.DataFrame({
+            "product_name": ["Loss Maker X", "Loss Maker Y", "Winner Z"],
+            "revenue": [2000.0, 1000.0, 5000.0],
+            "cost": [3000.0, 1500.0, 4000.0]  # Profits: -1000.0, -500.0, +1000.0
+        })
+        mapping = detect_column_mapping(df)
+        result = detect_loss_making_products(df, mapping, currency_symbol="$")
+
+        self.assertTrue(result.is_applicable)
+        self.assertEqual(result.total_flagged_count, 2)
+        self.assertEqual(result.total_combined_loss, 1500.0)  # |-1000| + |-500|
+
+        # Sorted descending by loss (worst loss first)
+        self.assertEqual(result.alerts[0].product_name, "Loss Maker X")
+        self.assertEqual(result.alerts[0].loss_amount, 1000.0)
+        self.assertEqual(result.alerts[1].product_name, "Loss Maker Y")
+        self.assertEqual(result.alerts[1].loss_amount, 500.0)
+
+        # Evidence table check
+        self.assertIsNotNone(result.evidence_df)
+        self.assertEqual(len(result.evidence_df), 2)
+        top_share = result.evidence_df.iloc[0]["Share of Total Losses (%)"]
+        self.assertAlmostEqual(top_share, (1000.0 / 1500.0) * 100, places=2)
+
+    def test_5_missing_financial_columns_handled_safely(self):
+        """5. Missing financial columns are handled safely without crash."""
+        df = pd.DataFrame({
+            "product_name": ["Item A", "Item B"],
+            "category": ["Hardware", "Software"]
+        })
+        mapping = detect_column_mapping(df)
+        result = detect_loss_making_products(df, mapping)
+
+        self.assertFalse(result.is_applicable)
+        self.assertEqual(result.total_flagged_count, 0)
+        self.assertEqual(len(result.alerts), 0)
+        self.assertIn("Insufficient financial data", result.status_message)
+
+    def test_6_empty_dataset_handled_safely(self):
+        """6. An empty dataset is handled safely."""
+        df = pd.DataFrame()
+        mapping = ColumnMapping(product_col="product", revenue_col="revenue", cost_col="cost")
+        result = detect_loss_making_products(df, mapping)
+
+        self.assertFalse(result.is_applicable)
+        self.assertEqual(result.total_flagged_count, 0)
+        self.assertIn("empty", result.status_message.lower())
+
+    def test_7_missing_and_non_numeric_values_safe(self):
+        """7. Missing and non-numeric values do not produce misleading results or crash."""
+        df = pd.DataFrame({
+            "product": ["Widget Alpha", "Widget Alpha", None, "Widget Beta"],
+            "revenue": ["$1,000", np.nan, "500", "invalid_str"],
+            "cost": [1500.0, 100.0, "300", 200.0]
+        })
+        mapping = ColumnMapping(product_col="product", revenue_col="revenue", cost_col="cost")
+        result = detect_loss_making_products(df, mapping)
+
+        self.assertTrue(result.is_applicable)
+        self.assertTrue(len(result.quality_warnings) > 0)
+        # Should not crash and should properly evaluate valid numeric values
+        flagged_names = [a.product_name for a in result.alerts]
+        self.assertIn("Widget Alpha", flagged_names)
+
+    def test_8_zero_revenue_division_by_zero_safety(self):
+        """8. Zero revenue does not cause a division-by-zero error in profit-margin calculations."""
+        df = pd.DataFrame({
+            "product_name": ["Free Tier Deficit"],
+            "revenue": [0.0],
+            "cost": [250.0]  # Profit: -250.0
+        })
+        mapping = detect_column_mapping(df)
+        result = detect_loss_making_products(df, mapping)
+
+        self.assertTrue(result.is_applicable)
+        self.assertEqual(result.total_flagged_count, 1)
+        alert = result.alerts[0]
+        self.assertEqual(alert.loss_amount, 250.0)
+        self.assertIsNone(alert.profit_margin_pct)  # Undefined, NOT ZeroDivisionError
+        self.assertIn("zero revenue", alert.explanation.lower())
+
+    def test_9_existing_filters_and_column_mappings_respected(self):
+        """9. Existing filters and column mappings are respected."""
+        df = pd.DataFrame({
+            "sku_code": ["SKU_1", "SKU_2", "SKU_3", "SKU_4"],
+            "dept": ["Audio", "Audio", "Cables", "Cables"],
+            "gross_turnover": [1000.0, 500.0, 200.0, 800.0],
+            "cogs_expense": [1400.0, 400.0, 350.0, 600.0]
+            # Profits: SKU_1 = -400 (Audio), SKU_2 = +100 (Audio), SKU_3 = -150 (Cables), SKU_4 = +200 (Cables)
+        })
+        mapping = ColumnMapping(
+            product_col="sku_code",
+            category_col="dept",
+            revenue_col="gross_turnover",
+            cost_col="cogs_expense"
+        )
+
+        # Unfiltered: both SKU_1 and SKU_3 flagged
+        all_res = detect_loss_making_products(df, mapping)
+        self.assertEqual(all_res.total_flagged_count, 2)
+
+        # Filtered to Cables only: only SKU_3 flagged
+        cables_df = df[df["dept"] == "Cables"].copy()
+        cables_res = detect_loss_making_products(cables_df, mapping)
+        self.assertEqual(cables_res.total_flagged_count, 1)
+        self.assertEqual(cables_res.alerts[0].product_name, "SKU_3")
+        self.assertEqual(cables_res.alerts[0].loss_amount, 150.0)
+
+        # Filtered to Audio only: only SKU_1 flagged
+        audio_df = df[df["dept"] == "Audio"].copy()
+        audio_res = detect_loss_making_products(audio_df, mapping)
+        self.assertEqual(audio_res.total_flagged_count, 1)
+        self.assertEqual(audio_res.alerts[0].product_name, "SKU_1")
+        self.assertEqual(audio_res.alerts[0].loss_amount, 400.0)
+
+    def test_10_existing_analytics_functions_unbroken(self):
+        """10. The new feature does not break existing analytics functions."""
+        df = pd.DataFrame({
+            "product_name": ["Prod 1", "Prod 2"],
+            "revenue": [2000.0, 1000.0],
+            "cost": [1200.0, 1500.0]
+        })
+        mapping = detect_column_mapping(df)
+
+        # Check existing KPI calculation
+        kpis = calculate_business_kpis(df, mapping)
+        self.assertEqual(kpis.total_revenue, 3000.0)
+        self.assertEqual(kpis.total_cost, 2700.0)
+        self.assertEqual(kpis.net_profit, 300.0)
+
+        # Check existing product performance
+        prod_df = analyze_product_performance(df, mapping, kpis)
+        self.assertIsNotNone(prod_df)
+        self.assertEqual(len(prod_df), 2)
+        loss_makers_status = prod_df[prod_df["Status"].str.contains("Loss-Maker")]
+        self.assertEqual(len(loss_makers_status), 1)
+
+        # Check existing recommendations
+        recs = generate_business_recommendations(kpis, prod_df)
+        self.assertTrue(len(recs) > 0)
+
+    def test_11_unit_cost_compatibility(self):
+        """11. Unit cost without quantity is rejected; with quantity, total cost is derived."""
+        # Case A: unit_cost without quantity -> rejected with clear message
+        df_no_qty = pd.DataFrame({
+            "product": ["Widget A"],
+            "revenue": [1000.0],
+            "unit_cost": [50.0]
+        })
+        mapping_no_qty = ColumnMapping(product_col="product", revenue_col="revenue", cost_col="unit_cost")
+        res_no_qty = detect_loss_making_products(df_no_qty, mapping_no_qty)
+        self.assertFalse(res_no_qty.is_applicable)
+        self.assertIn("represent unit cost", res_no_qty.status_message)
+
+        # Case B: unit_cost with quantity -> derives total cost safely
+        df_with_qty = pd.DataFrame({
+            "product": ["Widget A"],
+            "revenue": [1000.0],
+            "unit_cost": [30.0],
+            "quantity": [40]  # Total cost = 30 * 40 = 1200.0 -> loss of 200.0
+        })
+        mapping_with_qty = ColumnMapping(product_col="product", revenue_col="revenue", cost_col="unit_cost", quantity_col="quantity")
+        res_with_qty = detect_loss_making_products(df_with_qty, mapping_with_qty)
+        self.assertTrue(res_with_qty.is_applicable)
+        self.assertEqual(res_with_qty.total_flagged_count, 1)
+        self.assertEqual(res_with_qty.alerts[0].cost, 1200.0)
+        self.assertEqual(res_with_qty.alerts[0].loss_amount, 200.0)
+
+    def test_12_offline_ai_briefing_fallback(self):
+        """12. Offline AI investigation fallback provides deterministic guidance without Groq API."""
+        alert = BusinessAlert(
+            product_name="Sample Deficit SKU",
+            revenue=5000.0,
+            cost=6500.0,
+            net_profit=-1500.0,
+            loss_amount=1500.0,
+            profit_margin_pct=-30.0,
+            transactions=10,
+            units_sold=50,
+            category="Hardware",
+            title="Loss-Making Product Detected: Sample Deficit SKU",
+            explanation="Cost exceeds revenue by 1,500.00.",
+            suggested_action="Review vendor terms and list prices.",
+            evidence_summary="Rev: 5000 | Cost: 6500"
+        )
+        briefing = generate_alert_investigation_briefing([alert], api_key=None, currency_symbol="$")
+        self.assertIsNotNone(briefing)
+        self.assertIn("Sample Deficit SKU", briefing)
+        self.assertIn("$1,500.00", briefing)
+        self.assertIn("Supplier Cost Audit", briefing)
+        self.assertIn("Promotional Discount", briefing)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,10 @@ from utils.analytics import (
     calculate_business_kpis,
     analyze_product_performance,
     analyze_category_performance,
-    generate_business_recommendations
+    generate_business_recommendations,
+    BusinessAlert,
+    AlertSystemResult,
+    detect_loss_making_products
 )
 from utils.charts import (
     create_kpi_trend_chart,
@@ -28,7 +31,7 @@ from utils.charts import (
     create_numeric_distribution_chart,
     create_custom_studio_chart
 )
-from utils.ai_insights import generate_executive_ai_briefing
+from utils.ai_insights import generate_executive_ai_briefing, generate_alert_investigation_briefing
 from utils.helper import format_currency, format_percent, format_number
 
 
@@ -148,11 +151,8 @@ def load_sample_ecommerce_data() -> pd.DataFrame:
 # ==============================================================================
 # Header
 # ==============================================================================
-col_title, col_actions = st.columns([3, 1])
-
-with col_title:
-    st.title("💼 Business Performance Dashboard")
-    st.caption("Automated executive analytics, financial KPI monitoring, product profitability, and strategic directives.")
+st.title("💼 Business Performance Dashboard")
+st.caption("Automated executive analytics, financial KPI monitoring, product profitability, and strategic directives.")
 
 # Retrieve dataset
 active_df: Optional[pd.DataFrame] = None
@@ -165,19 +165,14 @@ elif "Dataset" in st.session_state:
     active_df = st.session_state["Dataset"]
     data_source_label = "Raw Uploaded Dataset (Uncleaned)"
 
-with col_actions:
-    if st.button("✨ Load Demo E-Commerce Dataset", use_container_width=True, help="Load a pre-configured commercial dataset to test all dashboard capabilities immediately."):
-        sample_df = load_sample_ecommerce_data()
-        st.session_state["Cleaned_Dataset"] = sample_df
-        st.session_state["Dataset"] = sample_df
-        st.rerun()
-
 if active_df is None or active_df.empty:
     st.info(
         "👋 **No dataset is currently loaded.** "
-        "Please upload a dataset on the **📂 Data Processing** page, or click **✨ Load Demo E-Commerce Dataset** above to explore the dashboard immediately."
+        "Please upload a dataset on the **📂 Data Processing** page to explore the dashboard."
     )
     st.stop()
+
+
 
 
 # ==============================================================================
@@ -308,6 +303,7 @@ kpis = calculate_business_kpis(filtered_df, current_mapping)
 product_perf_df = analyze_product_performance(filtered_df, current_mapping, kpis)
 category_perf_df = analyze_category_performance(filtered_df, current_mapping)
 recommendations = generate_business_recommendations(kpis, product_perf_df, category_perf_df, currency_symbol)
+alert_result = detect_loss_making_products(filtered_df, current_mapping, currency_symbol)
 
 
 # ==============================================================================
@@ -383,10 +379,112 @@ with st.container(border=True):
             recommendations=recommendations,
             product_df=product_perf_df,
             category_df=category_perf_df,
+            alerts=alert_result.alerts if alert_result.is_applicable else None,
             api_key=groq_key,
             currency_symbol=currency_symbol
         )
     st.markdown(ai_briefing)
+
+
+# ==============================================================================
+# Evidence-Based Business Risk Alerts
+# ==============================================================================
+st.markdown("### 🚨 Evidence-Based Business Risk Alerts")
+st.caption("Automated financial alert system detecting loss-making products, calculating verified financial deficits, and providing audit-ready evidence.")
+
+if not alert_result.is_applicable:
+    st.info(f"ℹ️ **Business Alerts Notice:** {alert_result.status_message}")
+elif alert_result.total_flagged_count == 0:
+    st.success(f"✅ **No Loss-Making Products Detected:** {alert_result.status_message}")
+else:
+    # Summary Metric Cards
+    al_col1, al_col2, al_col3, al_col4 = st.columns(4)
+    with al_col1:
+        st.metric(
+            label="⚠️ Flagged Loss-Makers",
+            value=f"{alert_result.total_flagged_count} SKU{'s' if alert_result.total_flagged_count > 1 else ''}",
+            delta="Eroding Net Profits",
+            delta_color="inverse"
+        )
+    with al_col2:
+        comb_loss_str = format_currency(alert_result.total_combined_loss, currency_symbol, decimals=2)
+        st.metric(
+            label="🔻 Combined Net Deficit",
+            value=comb_loss_str,
+            delta="Total Capital Drag",
+            delta_color="inverse"
+        )
+    with al_col3:
+        top_loss_alert = alert_result.alerts[0]
+        st.metric(
+            label="🔥 Worst Loss Contributor",
+            value=top_loss_alert.product_name,
+            delta=f"-{format_currency(top_loss_alert.loss_amount, currency_symbol, decimals=2)}",
+            delta_color="inverse"
+        )
+    with al_col4:
+        loss_share_rev = (alert_result.total_combined_loss / kpis.total_revenue * 100) if (kpis.total_revenue and kpis.total_revenue > 0) else None
+        st.metric(
+            label="📉 Loss Share of Sales",
+            value=format_percent(loss_share_rev) if loss_share_rev is not None else "N/A",
+            delta="Of Gross Revenue",
+            delta_color="off"
+        )
+
+    # Evidence Table
+    st.markdown("#### 📋 Evidence Summary Table")
+    if alert_result.evidence_df is not None and not alert_result.evidence_df.empty:
+        display_alerts_df = alert_result.evidence_df.copy()
+        display_alerts_df["Revenue"] = display_alerts_df["Revenue"].apply(lambda v: format_currency(v, currency_symbol, decimals=2))
+        display_alerts_df["Cost"] = display_alerts_df["Cost"].apply(lambda v: format_currency(v, currency_symbol, decimals=2))
+        display_alerts_df["Net Loss"] = display_alerts_df["Net Loss"].apply(lambda v: format_currency(v, currency_symbol, decimals=2))
+        display_alerts_df["Profit Margin (%)"] = display_alerts_df["Profit Margin (%)"].apply(lambda v: format_percent(v, decimals=1))
+        if "Share of Total Losses (%)" in display_alerts_df.columns:
+            display_alerts_df["Share of Total Losses (%)"] = display_alerts_df["Share of Total Losses (%)"].apply(lambda v: format_percent(v, decimals=1))
+        
+        t_col_tab, t_col_btn = st.columns([4, 1])
+        with t_col_tab:
+            st.dataframe(display_alerts_df, use_container_width=True, hide_index=True)
+        with t_col_btn:
+            csv_alerts = alert_result.evidence_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="📥 Download Evidence CSV",
+                data=csv_alerts,
+                file_name="loss_making_products_evidence.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+    # Detailed Expandable Alert Cards
+    st.markdown("#### 🔍 Alert Investigations & Recommended Actions")
+    for idx, alert in enumerate(alert_result.alerts, 1):
+        margin_disp = format_percent(alert.profit_margin_pct) if alert.profit_margin_pct is not None else "N/A (Zero Rev)"
+        with st.expander(
+            f"🚨 **Alert #{idx}: {alert.product_name}** — Net Loss: **-{format_currency(alert.loss_amount, currency_symbol, decimals=2)}** | Margin: **{margin_disp}**",
+            expanded=(idx == 1)
+        ):
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Recorded Revenue", format_currency(alert.revenue, currency_symbol, decimals=2))
+            c2.metric("Recorded Cost", format_currency(alert.cost, currency_symbol, decimals=2))
+            c3.metric("Net Profit / Loss", format_currency(alert.net_profit, currency_symbol, decimals=2), delta_color="inverse")
+            c4.metric("Profit Margin", margin_disp)
+
+            st.markdown(f"**Explanation:** {alert.explanation}")
+            st.markdown(f"**Suggested Action:** {alert.suggested_action}")
+
+            if alert.notes:
+                for note in alert.notes:
+                    st.caption(f"ℹ️ {note}")
+
+    # Optional AI Strategic Root-Cause Diagnostics
+    with st.expander("🤖 AI Strategic Diagnostic & Investigation Directives (Advisory Only)", expanded=False):
+        st.caption("AI-generated operational investigation hypotheses based strictly on verified pandas figures.")
+        ai_alert_briefing = generate_alert_investigation_briefing(
+            alerts=alert_result.alerts,
+            api_key=groq_key,
+            currency_symbol=currency_symbol
+        )
+        st.markdown(ai_alert_briefing)
 
 
 # ==============================================================================
@@ -608,6 +706,18 @@ Profit Definition           : {kpis.profit_source_explanation}
         report_text += f"    - Evidence    : {r.evidence}\n"
         report_text += f"    - Impact      : {r.business_impact}\n"
         report_text += f"    - Action      : {r.next_steps}\n"
+
+    if alert_result.is_applicable:
+        report_text += f"\n4. EVIDENCE-BASED BUSINESS RISK ALERTS\n----------------------------------------------------\n"
+        report_text += f"Status: {alert_result.status_message}\n"
+        report_text += f"Total Flagged Products: {alert_result.total_flagged_count}\n"
+        report_text += f"Combined Net Loss: {format_currency(alert_result.total_combined_loss, currency_symbol)}\n"
+        for idx, a in enumerate(alert_result.alerts, 1):
+            margin_str = format_percent(a.profit_margin_pct) if a.profit_margin_pct is not None else "N/A"
+            report_text += f"\n[{idx}] {a.product_name} | Net Loss: {format_currency(a.loss_amount, currency_symbol)} | Margin: {margin_str}\n"
+            report_text += f"    - Revenue: {format_currency(a.revenue, currency_symbol)} | Cost: {format_currency(a.cost, currency_symbol)}\n"
+            report_text += f"    - Explanation: {a.explanation}\n"
+            report_text += f"    - Action     : {a.suggested_action}\n"
 
     report_text += "\n====================================================\nGenerated with DataInsight AI\n"
 

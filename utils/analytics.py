@@ -1,3 +1,4 @@
+from utils.helper import format_currency, format_percent
 """
 Business Analytics & KPI Calculation Engine for DataInsight AI.
 Handles automatic column mapping, data validation, business KPI computations,
@@ -27,6 +28,7 @@ class ColumnMapping:
     order_id_col: Optional[str] = None
     profit_mode: str = "auto"  # 'direct', 'calculated', 'none'
     derived_revenue: bool = False  # True if revenue was derived from price * quantity
+    derived_cost: bool = False  # True if cost was derived from unit_cost * quantity
 
     def to_dict(self) -> Dict[str, Optional[str]]:
         return {
@@ -78,6 +80,39 @@ class Recommendation:
     evidence: str
     business_impact: str
     next_steps: str
+
+
+@dataclass
+class BusinessAlert:
+    """Represents a verified, evidence-backed alert for an unprofitable product."""
+    product_name: str
+    revenue: float
+    cost: float
+    net_profit: float
+    loss_amount: float
+    profit_margin_pct: Optional[float]
+    transactions: int
+    units_sold: Optional[float]
+    category: Optional[str]
+    title: str
+    explanation: str
+    suggested_action: str
+    evidence_summary: str
+    is_cost_estimated: bool = False
+    notes: List[str] = field(default_factory=list)
+
+
+@dataclass
+class AlertSystemResult:
+    """Contains all detected alerts, aggregated loss figures, and diagnostic state."""
+    is_applicable: bool
+    status_message: str
+    total_flagged_count: int = 0
+    total_combined_loss: float = 0.0
+    alerts: List[BusinessAlert] = field(default_factory=list)
+    evidence_df: Optional[pd.DataFrame] = None
+    data_notes: List[str] = field(default_factory=list)
+    quality_warnings: List[str] = field(default_factory=list)
 
 
 # ==============================================================================
@@ -315,6 +350,25 @@ def prepare_analysis_dataframe(
             "because no standalone revenue column was mapped."
         )
 
+    # Check if cost column represents unit cost and derive total cost if quantity is available
+    if mapping.cost_col and mapping.cost_col in calc_df.columns:
+        cost_name_lower = str(mapping.cost_col).strip().lower()
+        is_unit_cost = bool(re.search(r"^(unit[_\-\s]?cost|cost[_\-\s]?per[_\-\s]?unit|unit[_\-\s]?cogs|unit[_\-\s]?expense)$", cost_name_lower))
+        if is_unit_cost:
+            if mapping.quantity_col and mapping.quantity_col in calc_df.columns:
+                calc_df["_derived_cost"] = calc_df[mapping.cost_col].fillna(0) * calc_df[mapping.quantity_col].fillna(0)
+                mapping.cost_col = "_derived_cost"
+                mapping.derived_cost = True
+                warnings_list.append(
+                    f"Derived total cost as ({cost_name_lower} × {mapping.quantity_col}) "
+                    "because mapped cost column represents unit cost."
+                )
+            else:
+                warnings_list.append(
+                    f"Mapped cost column '{mapping.cost_col}' appears to represent unit cost, "
+                    "but no Quantity column is mapped. Total cost cannot be reliably computed."
+                )
+
     # Safely parse date column
     if mapping.date_col and mapping.date_col in calc_df.columns:
         if not pd.api.types.is_datetime64_any_dtype(calc_df[mapping.date_col]):
@@ -512,10 +566,12 @@ def analyze_product_performance(
     # Compute row-level profit
     if mapping.profit_mode == "direct" and profit_col and profit_col in calc_df.columns:
         calc_df["_calc_profit"] = calc_df[profit_col].fillna(0)
-    elif rev_col and cost_col and rev_col in calc_df.columns and cost_col in calc_df.columns:
+    elif mapping.profit_mode == "calculated" and rev_col and cost_col and rev_col in calc_df.columns and cost_col in calc_df.columns:
         calc_df["_calc_profit"] = calc_df[rev_col].fillna(0) - calc_df[cost_col].fillna(0)
     elif profit_col and profit_col in calc_df.columns:
         calc_df["_calc_profit"] = calc_df[profit_col].fillna(0)
+    elif rev_col and cost_col and rev_col in calc_df.columns and cost_col in calc_df.columns:
+        calc_df["_calc_profit"] = calc_df[rev_col].fillna(0) - calc_df[cost_col].fillna(0)
     else:
         calc_df["_calc_profit"] = np.nan
 
@@ -527,9 +583,10 @@ def analyze_product_performance(
         trans_count = len(group)
         rev = float(group[rev_col].fillna(0).sum()) if (rev_col and rev_col in group.columns) else 0.0
         cost = float(group[cost_col].fillna(0).sum()) if (cost_col and cost_col in group.columns) else 0.0
-        
         has_profit = group["_calc_profit"].notna().any()
         profit = float(group["_calc_profit"].fillna(0).sum()) if has_profit else None
+        if (not cost_col or cost_col not in group.columns) and has_profit and (rev_col and rev_col in group.columns) and profit is not None:
+            cost = float(rev - profit)
 
         margin_pct = (profit / rev * 100) if (profit is not None and rev > 0) else None
 
@@ -782,3 +839,226 @@ def generate_business_recommendations(
         ))
 
     return recs
+
+
+# ==============================================================================
+# 5. Evidence-Based Business Alert System
+# ==============================================================================
+
+def detect_loss_making_products(
+    df: pd.DataFrame,
+    mapping: ColumnMapping,
+    currency_symbol: str = "$"
+) -> AlertSystemResult:
+    """
+    Automatically detects loss-making products using the active filtered dataset.
+    Calculates exact financial impact, revenue, cost, profit, and margins.
+    Generates evidence-backed business alerts with deterministic explanations and next steps.
+    """
+    result = AlertSystemResult(is_applicable=False, status_message="")
+
+    # 1. Check for empty or invalid DataFrame
+    if df is None or df.empty:
+        result.status_message = "The active dataset is empty. Load or upload data to evaluate business alerts."
+        return result
+
+    # 2. Check for mapped product column
+    if not mapping.product_col or mapping.product_col not in df.columns:
+        result.status_message = "Product column is not mapped. Please map a Product/SKU column to detect loss-making products."
+        return result
+
+    # 3. Check for unit-cost incompatibility without quantity
+    if mapping.cost_col and mapping.cost_col in df.columns:
+        cost_name_lower = str(mapping.cost_col).strip().lower()
+        is_unit_cost = bool(re.search(r"^(unit[_\-\s]?cost|cost[_\-\s]?per[_\-\s]?unit|unit[_\-\s]?cogs|unit[_\-\s]?expense)$", cost_name_lower))
+        if is_unit_cost and (not mapping.quantity_col or mapping.quantity_col not in df.columns):
+            result.status_message = (
+                f"Mapped cost column '{mapping.cost_col}' appears to represent unit cost, but no Quantity column is mapped. "
+                "Total cost and profit cannot be reliably computed without unit distortion."
+            )
+            result.data_notes.append("Incompatible financial units: unit cost cannot be directly compared against total revenue without transaction quantities.")
+            return result
+
+    # 4. Prepare data safely using standard engine
+    calc_df, prep_warnings = prepare_analysis_dataframe(df, mapping)
+    result.quality_warnings.extend(prep_warnings)
+
+    prod_col = mapping.product_col
+    rev_col = mapping.revenue_col
+    cost_col = mapping.cost_col
+    profit_col = mapping.profit_col
+    qty_col = mapping.quantity_col
+    cat_col = mapping.category_col
+
+    # 5. Determine profit computation method & check financial columns
+    is_profit_mapped = bool(profit_col and profit_col in calc_df.columns)
+    is_rev_mapped = bool(rev_col and rev_col in calc_df.columns)
+    is_cost_mapped = bool(cost_col and cost_col in calc_df.columns)
+
+    profit_source = ""
+    if mapping.profit_mode == "direct" and is_profit_mapped:
+        calc_df["_alert_profit"] = calc_df[profit_col].fillna(0)
+        profit_source = f"Direct profit column '{profit_col}'"
+    elif mapping.profit_mode == "calculated" and is_rev_mapped and is_cost_mapped:
+        calc_df["_alert_profit"] = calc_df[rev_col].fillna(0) - calc_df[cost_col].fillna(0)
+        profit_source = f"Calculated as Revenue ('{rev_col}') − Cost ('{cost_col}')"
+    elif is_profit_mapped:
+        calc_df["_alert_profit"] = calc_df[profit_col].fillna(0)
+        profit_source = f"Direct profit column '{profit_col}'"
+    elif is_rev_mapped and is_cost_mapped:
+        calc_df["_alert_profit"] = calc_df[rev_col].fillna(0) - calc_df[cost_col].fillna(0)
+        profit_source = f"Calculated as Revenue ('{rev_col}') − Cost ('{cost_col}')"
+    else:
+        result.status_message = (
+            "Insufficient financial data: Either a Net Profit column or both Sales/Revenue and Cost columns "
+            "must be mapped to detect loss-making products."
+        )
+        return result
+
+    # 6. Group by Product and compute financial metrics per product
+    grouped = calc_df.groupby(prod_col, dropna=False)
+    product_summaries = []
+
+    for p_val, group in grouped:
+        p_name = str(p_val) if pd.notna(p_val) else "Unknown / Unnamed Product"
+        trans_count = int(len(group))
+        
+        rev = float(group[rev_col].fillna(0).sum()) if is_rev_mapped else 0.0
+        cost = float(group[cost_col].fillna(0).sum()) if is_cost_mapped else 0.0
+        profit = float(group["_alert_profit"].sum())
+
+        # Inferred cost if direct profit was mapped without cost column
+        is_cost_inferred = False
+        if not is_cost_mapped and is_rev_mapped and is_profit_mapped:
+            cost = float(rev - profit)
+            is_cost_inferred = True
+
+        # Profit margin calculation (safe against zero / negative revenue)
+        if rev > 0:
+            margin_pct = float((profit / rev) * 100)
+        elif rev == 0 and profit == 0:
+            margin_pct = 0.0
+        else:
+            margin_pct = None  # Undefined when rev <= 0 and profit != 0
+
+        units = float(group[qty_col].fillna(0).sum()) if (qty_col and qty_col in group.columns) else None
+        category = str(group[cat_col].mode().iloc[0]) if (cat_col and cat_col in group.columns and not group[cat_col].dropna().empty) else None
+
+        product_summaries.append({
+            "product_name": p_name,
+            "category": category,
+            "revenue": rev,
+            "cost": cost,
+            "net_profit": profit,
+            "margin_pct": margin_pct,
+            "transactions": trans_count,
+            "units_sold": units,
+            "is_cost_inferred": is_cost_inferred
+        })
+
+    if not product_summaries:
+        result.is_applicable = True
+        result.status_message = "No product records available in active view."
+        return result
+
+    # 7. Identify loss-makers (strictly profit < -1e-6 to avoid float rounding edge-cases)
+    loss_makers = [p for p in product_summaries if p["net_profit"] < -1e-6]
+
+    result.is_applicable = True
+
+    if not loss_makers:
+        result.status_message = "All products in the active view are profitable or break-even. No loss-making products detected."
+        result.total_flagged_count = 0
+        result.total_combined_loss = 0.0
+        result.alerts = []
+        return result
+
+    # Sort loss makers descending by loss amount (worst loss first)
+    loss_makers.sort(key=lambda x: x["net_profit"])
+
+    total_loss = sum(abs(p["net_profit"]) for p in loss_makers)
+    result.total_combined_loss = float(total_loss)
+    result.total_flagged_count = len(loss_makers)
+    result.status_message = f"Detected {len(loss_makers)} loss-making product(s) generating an aggregate net loss of {format_currency(total_loss, currency_symbol)}."
+
+    evidence_rows = []
+    for p in loss_makers:
+        loss_amt = abs(p["net_profit"])
+        prod_title = f"Loss-Making Product Detected: {p['product_name']}"
+        margin_str = format_percent(p["margin_pct"]) if p["margin_pct"] is not None else "N/A"
+
+        # Construct fact-based explanation
+        rev_f = format_currency(p["revenue"], currency_symbol)
+        cost_f = format_currency(p["cost"], currency_symbol)
+        loss_f = format_currency(loss_amt, currency_symbol)
+        profit_f = format_currency(p["net_profit"], currency_symbol)
+
+        if p["revenue"] > 0:
+            explanation = (
+                f"The recorded cumulative cost ({cost_f}) exceeds recorded revenue ({rev_f}) by {loss_f}, "
+                f"resulting in an aggregate net profit of {profit_f} ({margin_str} profit margin) across {p['transactions']:,} transaction(s)."
+            )
+        elif p["revenue"] == 0:
+            explanation = (
+                f"Recorded revenue is {rev_f} while cumulative costs incurred total {cost_f}, "
+                f"yielding an aggregate net loss of {loss_f} across {p['transactions']:,} transaction(s). Profit margin is undefined due to zero revenue."
+            )
+        else:
+            explanation = (
+                f"Recorded net revenue is negative ({rev_f}, typically indicating returns/chargebacks) while costs total {cost_f}, "
+                f"resulting in an aggregate net deficit of {loss_f} across {p['transactions']:,} transaction(s)."
+            )
+
+        # Practical recommended action
+        suggested_action = (
+            "Review the product's selling price, purchase cost (COGS), promotional discounts, and return/refund rates "
+            "before deciding whether to renegotiate supplier pricing, adjust list prices, or phase out the SKU."
+        )
+
+        evidence_summary = (
+            f"Revenue: {rev_f} | Cost: {cost_f} | Net Loss: {loss_f} | Margin: {margin_str} | Transactions: {p['transactions']:,}"
+        )
+
+        alert_notes = []
+        if p["is_cost_inferred"]:
+            alert_notes.append("Product cost was inferred as (Revenue − Net Profit) because no dedicated cost column was mapped.")
+        if profit_source:
+            alert_notes.append(f"Profit determined via {profit_source}.")
+
+        alert = BusinessAlert(
+            product_name=p["product_name"],
+            revenue=p["revenue"],
+            cost=p["cost"],
+            net_profit=p["net_profit"],
+            loss_amount=loss_amt,
+            profit_margin_pct=p["margin_pct"],
+            transactions=p["transactions"],
+            units_sold=p["units_sold"],
+            category=p["category"],
+            title=prod_title,
+            explanation=explanation,
+            suggested_action=suggested_action,
+            evidence_summary=evidence_summary,
+            is_cost_estimated=p["is_cost_inferred"],
+            notes=alert_notes
+        )
+        result.alerts.append(alert)
+
+        # Evidence table row
+        loss_share = (loss_amt / total_loss * 100) if total_loss > 0 else 0.0
+        row_dict = {
+            "Product": p["product_name"],
+            "Category": p["category"] or "N/A",
+            "Revenue": p["revenue"],
+            "Cost": p["cost"],
+            "Net Loss": loss_amt,
+            "Profit Margin (%)": p["margin_pct"],
+            "Transactions": p["transactions"],
+            "Share of Total Losses (%)": loss_share
+        }
+        if p["units_sold"] is not None:
+            row_dict["Units Sold"] = p["units_sold"]
+        evidence_rows.append(row_dict)
+
+    result.evidence_df = pd.DataFrame(evidence_rows)
+    return result
